@@ -4,6 +4,7 @@ import json
 import urllib.request
 import urllib.error
 import io
+import random
 
 # Konfigurasi Halaman Streamlit
 st.set_page_config(
@@ -208,7 +209,7 @@ user_grade = st.sidebar.number_input(
     help="Masukkan nilai rata-rata prestasi akademik Anda untuk mensimulasikan posisi peringkat."
 )
 
-# Slider penyerapan tahap sebelumnya (Zonasi, Afirmasi, Mutasi, Prestasi Lomba)
+# Slider penyerapan tahap sebelumnya (Zonasi, Afirmasi, Mutasi, Lomba)
 absorbed_rate = st.sidebar.slider(
     "Siswa Lolos Tahap I dan II (%)",
     min_value=10,
@@ -218,18 +219,27 @@ absorbed_rate = st.sidebar.slider(
     help="Persentase estimasi siswa dengan nilai tinggi yang SUDAH diterima pada tahap sebelumnya (Zonasi dan Afirmasi) sehingga tidak ikut berkompetisi di Tahap III."
 )
 
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Simulasi Pilihan Sekolah Anda")
+st.sidebar.write("Tentukan 3 sekolah pilihan Anda untuk disimulasikan dalam proses seleksi limpahan (cascade):")
+
+school_options = {sch["name"]: sch["id"] for sch in TARGET_SCHOOLS}
+school_names_list = list(school_options.keys())
+
+pilihan_1 = st.sidebar.selectbox("Pilihan 1", school_names_list, index=2) # SMAN 5
+pilihan_2 = st.sidebar.selectbox("Pilihan 2", school_names_list, index=1) # SMAN 2
+pilihan_3 = st.sidebar.selectbox("Pilihan 3", school_names_list, index=4) # SMAN 15
+
+user_choices_ids = [
+    school_options[pilihan_1],
+    school_options[pilihan_2],
+    school_options[pilihan_3]
+]
+
 if st.sidebar.button("Refresh Data Live"):
     st.cache_data.clear()
     st.toast("Cache dibersihkan! Memuat ulang data dari SPMB Jatim...")
     st.rerun()
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-**Catatan Aplikasi:**
-- Data diperoleh langsung secara real-time dari API resmi spmbjatim.net.
-- Simulasi dihitung dengan menyisipkan nilai Anda ke dalam database pendaftar aktif saat ini.
-- Sekolah target disaring khusus Kota Surabaya (SMAN 1, 2, 5, 6, 15, 16).
-""")
 
 # --- LOAD DATA ---
 with st.spinner("Mengambil data terbaru dari SPMB Jatim..."):
@@ -307,88 +317,150 @@ for sch in TARGET_SCHOOLS:
         "df": df_combined
     })
 
-# --- HITUNG BOBOT PREFERENSI & FORECASTING ---
-# Hitung total siswa di Surabaya dengan nilai > user_grade
+# --- SIMULASI LIMPAHAN KASKADE (CASCADE MATCHING SIMULATION) ---
+# 1. Hitung total siswa di Surabaya dengan nilai > user_grade
 students_above_user = calculate_students_above(user_grade)
 
-# Kurangi kompetitor kota yang sudah diterima di Tahap I (Zonasi) & Tahap II (Afirmasi/Mutasi)
+# 2. Kurangi kompetitor kota yang sudah diterima di Tahap I & II
 active_competitors_in_city = int(round(students_above_user * (1 - (absorbed_rate / 100.0))))
 
-# Hitung jumlah siswa pendaftar nyata di 6 sekolah target yang saat ini nilainya di atas user_grade
-current_competitors_per_school = {}
-total_current_competitors = 0
-for sch in processed_schools:
-    sch_id = sch["id"]
-    df_real = sch["df"][sch["df"]["is_sim"] == False]
-    above_count = len(df_real[df_real["Nilai"] > user_grade])
-    current_competitors_per_school[sch_id] = above_count
-    total_current_competitors += above_count
+# 3. Jalankan simulasi kaskade di sisi server Python menggunakan data sebaran kota
+def run_cascade_matching():
+    # Set seed untuk konsistensi simulasi
+    random.seed(42)
+    
+    # Bangun data nilai siswa Kota Surabaya secara lengkap berdasarkan sebaran resmi
+    city_grades = []
+    for _ in range(20): city_grades.append(random.uniform(95.001, 100.0))
+    for _ in range(490): city_grades.append(random.uniform(90.001, 95.0))
+    for _ in range(2350): city_grades.append(random.uniform(85.001, 90.0))
+    for _ in range(6888): city_grades.append(random.uniform(80.001, 85.0))
+    for _ in range(14409): city_grades.append(random.uniform(70.001, 80.0))
+    for _ in range(2283): city_grades.append(random.uniform(50.0, 70.0))
+    city_grades.sort(reverse=True)
+    
+    # Hilangkan siswa yang terserap Tahap I & II (Zonasi, Afirmasi, Mutasi)
+    active_grades = [g for g in city_grades if random.random() > (absorbed_rate / 100.0)]
+    
+    # Susun pilihan sekolah untuk tiap siswa kota secara acak-proporsional sesuai bobot reputasi
+    school_ids = ["179", "178", "194", "188", "182", "177"] # Urutan: SMAN 5, 2, 15, 16, 6, 1
+    weights = [0.35, 0.25, 0.20, 0.10, 0.07, 0.03]
+    
+    sim_students = []
+    for g in active_grades:
+        c1 = random.choices(school_ids, weights=weights, k=1)[0]
+        idx = school_ids.index(c1)
+        c2 = school_ids[(idx + 1) % len(school_ids)]
+        c3 = school_ids[(idx + 2) % len(school_ids)]
+        sim_students.append({'grade': g, 'choices': [c1, c2, c3], 'accepted': None, 'is_user': False})
+        
+    # Masukkan user ke dalam data simulasi dengan pilihannya sendiri
+    user_student = {
+        'grade': float(user_grade),
+        'choices': user_choices_ids,
+        'accepted': None,
+        'is_user': True
+    }
+    sim_students.append(user_student)
+    
+    # Urutkan seluruh siswa simulasi berdasarkan nilai akademik tertinggi
+    sim_students.sort(key=lambda x: x['grade'], reverse=True)
+    
+    # Jalankan algoritma alokasi kaskade (Pendaftar lolos di pilihan 1, sisa limpahan turun ke pilihan 2 & 3)
+    school_quotas = {sch["id"]: sch["quota"] for sch in processed_schools}
+    accepted_lists = {sch["id"]: [] for sch in processed_schools}
+    
+    for s in sim_students:
+        for choice in s['choices']:
+            if len(accepted_lists[choice]) < school_quotas[choice]:
+                accepted_lists[choice].append(s)
+                s['accepted'] = choice
+                break
+                
+    # Tarik data cutoff (nilai terendah yang diterima) dan peringkat simulasi user
+    matching_summary = {}
+    for sch in processed_schools:
+        sch_id = sch["id"]
+        accepted = accepted_lists[sch_id]
+        cutoff_grade = accepted[-1]['grade'] if len(accepted) == school_quotas[sch_id] else 0.0
+        
+        # Cari rank simulasi user
+        user_idx = [i for i, x in enumerate(accepted) if x['is_user']]
+        if user_idx:
+            rank_in_sim = user_idx[0] + 1
+        else:
+            # Jika user tidak masuk, estimasikan peringkatnya di antara peminat sekolah tersebut
+            competitors_to_school = [x['grade'] for x in sim_students if x['choices'][0] == sch_id]
+            competitors_to_school.append(float(user_grade))
+            competitors_to_school.sort(reverse=True)
+            rank_in_sim = competitors_to_school.index(float(user_grade)) + 1
+            
+        matching_summary[sch_id] = {
+            "cutoff": cutoff_grade,
+            "rank": rank_in_sim
+        }
+        
+    return matching_summary, user_student['accepted']
 
-# Bobot popularitas default sekolah berdasarkan top 3 (SMAN 5 > SMAN 2 > SMAN 15 > SMAN 16 > SMAN 6 > SMAN 1)
-default_popularity_weights = {
-    "179": 0.28,  # SMAN 5
-    "178": 0.22,  # SMAN 2
-    "194": 0.18,  # SMAN 15
-    "188": 0.14,  # SMAN 16
-    "182": 0.11,  # SMAN 6
-    "177": 0.07   # SMAN 1
-}
+# Eksekusi simulasi
+sim_summary, user_accepted_school_id = run_cascade_matching()
 
-# Gabungkan data sebaran nyata di lapangan saat ini (70%) dengan bobot reputasi bawaan (30%)
-school_weights = {}
-for sch in processed_schools:
-    sch_id = sch["id"]
-    if total_current_competitors > 0:
-        real_share = current_competitors_per_school[sch_id] / total_current_competitors
-        school_weights[sch_id] = 0.7 * real_share + 0.3 * default_popularity_weights.get(sch_id, 0.1)
-    else:
-        school_weights[sch_id] = default_popularity_weights.get(sch_id, 0.1)
-
-# Normalisasi bobot agar jumlahnya pas 1.0 di antara 6 sekolah kita
-sum_weights = sum(school_weights.values())
-if sum_weights > 0:
-    for sch_id in school_weights:
-        school_weights[sch_id] /= sum_weights
-
-# Lakukan proyeksi akhir dan peluang masuk
+# Hitung Peluang Diterima (%) berdasarkan hasil kaskade
 forecasting_results = []
 for sch in processed_schools:
     sch_id = sch["id"]
+    cutoff = sim_summary[sch_id]["cutoff"]
+    sim_rank = sim_summary[sch_id]["rank"]
     quota = sch["quota"]
     
-    # Estimasi kompetitor proyeksi = sisa kompetitor aktif di surabaya > user_grade * bobot sekolah tersebut
-    projected_competitors = active_competitors_in_city * school_weights[sch_id]
-    
-    # Proyeksi peringkat akhir = kompetitor + 1
-    projected_rank = int(round(projected_competitors)) + 1
-    
-    # Hitung peluang kelulusan: rasio antara kuota dibanding proyeksi peringkat
-    if projected_rank <= quota:
-        acceptance_chance = 99.0
+    # Peluang dinamis berdasarkan kedekatan nilai dengan batas nilai cutoff simulasi
+    if user_grade >= cutoff:
+        chance = 99.0
     else:
-        acceptance_chance = (quota / projected_rank) * 100.0
+        # Selisih nilai menentukan persentase peluang
+        diff = cutoff - user_grade
+        chance = (1.0 - (diff / 3.0)) * 100.0
         
-    # Batasi minimal peluang di angka 5%
-    acceptance_chance = max(5.0, min(99.0, acceptance_chance))
+    chance = max(5.0, min(95.0, chance))
     
+    # Tentukan keterangan kelulusan simulasi
+    if user_accepted_school_id == sch_id:
+        status_label = "Diterima Simulasi (Prioritas)"
+        chance = 99.0
+    elif user_grade >= cutoff:
+        status_label = "Lolos Batas Nilai"
+    else:
+        status_label = "Di Bawah Batas Nilai"
+        
     forecasting_results.append({
         "id": sch_id,
         "name": sch["name"],
         "quota": quota,
         "current_rank": sch["rank"],
-        "projected_rank": projected_rank,
-        "chance": acceptance_chance
+        "projected_rank": sim_rank,
+        "cutoff": cutoff,
+        "chance": chance,
+        "status": status_label
     })
 
-# Tambahkan hasil forecasting ke object processed_schools
+# Sinkronkan hasil forecasting ke object processed_schools
 for sch in processed_schools:
     f_res = next(f for f in forecasting_results if f["id"] == sch["id"])
     sch["projected_rank"] = f_res["projected_rank"]
+    sch["cutoff"] = f_res["cutoff"]
     sch["chance"] = f_res["chance"]
+    sch["status"] = f_res["status"]
 
 # --- RENDER DASHBOARD UTAMA ---
 st.markdown("### Dashboard Hasil Simulasi dan Proyeksi Kelulusan")
-st.write(f"Berikut adalah simulasi posisi saat ini serta proyeksi akhir (Forecasting) peluang masuk Anda di 6 SMA target:")
+st.write(f"Berikut adalah simulasi posisi saat ini serta hasil **Simulasi Limpahan Kaskade** peluang masuk Anda di 6 SMA target:")
+
+# Highlight status penerimaan simulasi user
+pilihan_names = {sch["id"]: sch["name"] for sch in TARGET_SCHOOLS}
+if user_accepted_school_id:
+    st.info(f"Hasil Alokasi Simulasi: Berdasarkan nilai {user_grade:.2f} dan urutan pilihan Anda, Anda diproyeksikan **Diterima di {pilihan_names[user_accepted_school_id]}**.")
+else:
+    st.warning(f"Hasil Alokasi Simulasi: Berdasarkan nilai {user_grade:.2f} dan urutan pilihan Anda, Anda diproyeksikan **Belum Lolos** di ketiga pilihan sekolah Anda karena nilai berada di bawah batas cutoff simulasi.")
 
 cols1 = st.columns(3)
 for i in range(3):
@@ -408,9 +480,10 @@ for i in range(3):
             <div class="school-title">{sch['name']}</div>
             <div style="font-size: 0.85rem; color: #000000; margin-bottom: 2px;">Peringkat Saat Ini / Kuota:</div>
             <div style="font-size: 1.25rem; font-weight: 700; color: #000000;">#{sch['rank']} / {sch['quota']}</div>
-            <div style="font-size: 0.85rem; color: #000000; margin-top: 10px; margin-bottom: 2px;">Proyeksi Peringkat Akhir:</div>
-            <div class="rank-display">#{sch['projected_rank']}</div>
-            <div style="font-size: 0.88rem; font-weight: 700; margin-bottom: 12px; color: #000000;">{status_desc}</div>
+            <div style="font-size: 0.85rem; color: #000000; margin-top: 10px; margin-bottom: 2px;">Prediksi Batas Nilai Cutoff:</div>
+            <div class="rank-display">{sch['cutoff']:.2f}</div>
+            <div style="font-size: 0.88rem; font-weight: 700; margin-bottom: 4px; color: #000000;">{status_desc}</div>
+            <div style="font-size: 0.85rem; font-weight: 600; color: #7f1d1d;">Status: {sch['status']}</div>
             <div class="stat-container">
                 <div class="stat-item"><span>Daya Tampung (Pagu):</span><span class="stat-value">{sch['capacity']}</span></div>
                 <div class="stat-item"><span>Kuota Akademik (25%):</span><span class="stat-value">{sch['quota']}</span></div>
@@ -437,9 +510,10 @@ for i in range(3, 6):
             <div class="school-title">{sch['name']}</div>
             <div style="font-size: 0.85rem; color: #000000; margin-bottom: 2px;">Peringkat Saat Ini / Kuota:</div>
             <div style="font-size: 1.25rem; font-weight: 700; color: #000000;">#{sch['rank']} / {sch['quota']}</div>
-            <div style="font-size: 0.85rem; color: #000000; margin-top: 10px; margin-bottom: 2px;">Proyeksi Peringkat Akhir:</div>
-            <div class="rank-display">#{sch['projected_rank']}</div>
-            <div style="font-size: 0.88rem; font-weight: 700; margin-bottom: 12px; color: #000000;">{status_desc}</div>
+            <div style="font-size: 0.85rem; color: #000000; margin-top: 10px; margin-bottom: 2px;">Prediksi Batas Nilai Cutoff:</div>
+            <div class="rank-display">{sch['cutoff']:.2f}</div>
+            <div style="font-size: 0.88rem; font-weight: 700; margin-bottom: 4px; color: #000000;">{status_desc}</div>
+            <div style="font-size: 0.85rem; font-weight: 600; color: #7f1d1d;">Status: {sch['status']}</div>
             <div class="stat-container">
                 <div class="stat-item"><span>Daya Tampung (Pagu):</span><span class="stat-value">{sch['capacity']}</span></div>
                 <div class="stat-item"><span>Kuota Akademik (25%):</span><span class="stat-value">{sch['quota']}</span></div>
@@ -455,7 +529,7 @@ st.markdown("### Forecasting dan Analisis Sebaran Nilai Kota")
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.write("Analisis Proyeksi Akhir Keketatan Jalur Prestasi Akademik:")
+    st.write("Analisis Proyeksi Akhir Keketatan Jalur Prestasi Akademik (Model Kaskade):")
     
     # Buat dataframe ringkasan forecasting untuk ditampilkan dalam bentuk tabel
     df_forecasting = pd.DataFrame([
@@ -463,9 +537,10 @@ with col_left:
             "Sekolah": f["name"],
             "Kuota": f["quota"],
             "Peringkat Saat Ini": f["current_rank"],
-            "Proyeksi Peringkat Akhir": f["projected_rank"],
-            "Prediksi Peluang Diterima": f"{f['chance']:.1f}%",
-            "Keterangan": "Sangat Tinggi" if f["chance"] >= 75.0 else ("Cukup Bersaing" if f["chance"] >= 40.0 else "Persaingan Ketat")
+            "Prediksi Peringkat Simulasi": f["projected_rank"],
+            "Batas Nilai Lolos (Cutoff)": f"{f['cutoff']:.2f}",
+            "Prediksi Peluang Lolos": f"{f['chance']:.1f}%",
+            "Hasil Alokasi": f["status"]
         } for f in forecasting_results
     ])
     st.dataframe(df_forecasting, use_container_width=True, hide_index=True)
@@ -475,7 +550,7 @@ with col_right:
     st.markdown(f"""
     - Jumlah siswa di Surabaya dengan nilai **> {user_grade:.2f}**: **{students_above_user} siswa**
     - Sisa kompetitor aktif setelah dikurangi penyerapan Tahap I & II (**{absorbed_rate}%**): **{active_competitors_in_city} siswa**
-    - Potensi akumulasi persaingan: Dari estimasi **{active_competitors_in_city}** siswa bernilai tinggi yang belum terdaftar, keketatan sekolah unggulan (Top 3: SMAN 5, 2, 15) akan meningkat di akhir masa pendaftaran.
+    - **Logika Kaskade (Limpahan)**: Sistem menyimulasikan 3 pilihan sekolah untuk masing-masing siswa kota. Siswa bernilai tinggi yang terdepak dari pilihan 1 (karena melebihi kuota) akan melimpah (*cascade*) ke pilihan 2 & 3, sehingga memperebutkan sisa kuota sekolah tingkat berikutnya secara dinamis.
     """)
     
     # Tampilkan tabel sebaran data asli sebagai referensi pengguna
