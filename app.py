@@ -167,13 +167,10 @@ def calculate_students_above(grade):
     return int(round(total_above))
 
 @st.cache_data(ttl=900)
-def fetch_school_data(school_id, ranking_type):
-    """Menarik data pemeringkatan akademik SMA Surabaya untuk kelulusan 2026"""
-    if ranking_type == "Sementara":
-        url = f"https://app.spmbjatim.net/api/acceptances/second-wave-registration/sma/grades?enable_pagination=0&filter[school_id]={school_id}&filter[graduation_year]=this_year"
-    else:
-        url = f"https://static.spmbjatim.net/second-wave-acceptance/1/{school_id}.json"
-        
+def fetch_school_data(school_id):
+    """Menarik data live pemeringkatan sementara akademik SMA Surabaya untuk kelulusan 2026"""
+    url = f"https://app.spmbjatim.net/api/acceptances/second-wave-registration/sma/grades?enable_pagination=0&filter[school_id]={school_id}&filter[graduation_year]=this_year"
+    
     req = urllib.request.Request(
         url,
         headers={
@@ -185,13 +182,8 @@ def fetch_school_data(school_id, ranking_type):
     try:
         with urllib.request.urlopen(req, timeout=15) as response:
             res_json = json.loads(response.read().decode('utf-8'))
-            if ranking_type == "Sementara":
-                return res_json.get("data", [])
-            else:
-                return res_json
+            return res_json.get("data", [])
     except urllib.error.HTTPError as e:
-        if ranking_type == "Final" and e.code == 404:
-            return None
         st.error(f"HTTP Error {e.code} saat mengambil data SMA ID {school_id}")
         return []
     except Exception as e:
@@ -206,12 +198,6 @@ st.markdown('<p class="main-subtitle">Analisis Real-time Hasil Pemeringkatan Aka
 # --- SIDEBAR CONTROLS ---
 st.sidebar.markdown("### Pengaturan dan Filter")
 
-ranking_type = st.sidebar.selectbox(
-    "Jenis Pemeringkatan",
-    ["Sementara", "Final"],
-    help="Pilih 'Sementara' untuk melihat data live PPDB yang diperbarui setiap 15 menit, atau 'Final' jika pengumuman kelulusan resmi telah dirilis."
-)
-
 user_grade = st.sidebar.number_input(
     "Masukkan Nilai Akademik Anda",
     min_value=0.00,
@@ -222,7 +208,7 @@ user_grade = st.sidebar.number_input(
     help="Masukkan nilai rata-rata prestasi akademik Anda untuk mensimulasikan posisi peringkat."
 )
 
-if st.sidebar.button("Refresh Data SPMB"):
+if st.sidebar.button("Refresh Data Live"):
     st.cache_data.clear()
     st.toast("Cache dibersihkan! Memuat ulang data dari SPMB Jatim...")
     st.rerun()
@@ -238,18 +224,8 @@ st.sidebar.markdown("""
 # --- LOAD DATA ---
 with st.spinner("Mengambil data terbaru dari SPMB Jatim..."):
     raw_data = {}
-    is_final_empty = False
-    
     for sch in TARGET_SCHOOLS:
-        data = fetch_school_data(sch["id"], ranking_type)
-        if data is None and ranking_type == "Final":
-            is_final_empty = True
-            break
-        raw_data[sch["id"]] = data
-
-if is_final_empty:
-    st.warning("Data Pemeringkatan Final untuk Kelulusan 2026 belum dirilis oleh SPMB Jatim. Silakan pilih 'Sementara' pada panel sebelah kiri.")
-    st.stop()
+        raw_data[sch["id"]] = fetch_school_data(sch["id"])
 
 # --- PROSES SIMULASI & PERINGKAT ---
 processed_schools = []
@@ -374,8 +350,6 @@ for sch in processed_schools:
     projected_rank = int(round(projected_competitors)) + 1
     
     # Hitung peluang kelulusan: rasio antara kuota dibanding proyeksi peringkat
-    # Jika proyeksi peringkat lebih kecil dari kuota, peluang sangat tinggi (dibatasi maks 99% karena faktor jarak/waktu daftar)
-    # Jika lebih besar, peluang menurun mengikuti proporsi kuota / proyeksi peringkat
     if projected_rank <= quota:
         acceptance_chance = 99.0
     else:
