@@ -488,6 +488,8 @@ for i in range(3):
                 <div class="stat-item"><span>Daya Tampung (Pagu):</span><span class="stat-value">{sch['capacity']}</span></div>
                 <div class="stat-item"><span>Kuota Akademik (25%):</span><span class="stat-value">{sch['quota']}</span></div>
                 <div class="stat-item"><span>Pendaftar Saat Ini:</span><span class="stat-value">{sch['total']}</span></div>
+                <div class="stat-item"><span>Nilai Tertinggi:</span><span class="stat-value">{sch['max']:.2f}</span></div>
+                <div class="stat-item"><span>Nilai Terendah:</span><span class="stat-value">{sch['min']:.2f}</span></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -518,6 +520,8 @@ for i in range(3, 6):
                 <div class="stat-item"><span>Daya Tampung (Pagu):</span><span class="stat-value">{sch['capacity']}</span></div>
                 <div class="stat-item"><span>Kuota Akademik (25%):</span><span class="stat-value">{sch['quota']}</span></div>
                 <div class="stat-item"><span>Pendaftar Saat Ini:</span><span class="stat-value">{sch['total']}</span></div>
+                <div class="stat-item"><span>Nilai Tertinggi:</span><span class="stat-value">{sch['max']:.2f}</span></div>
+                <div class="stat-item"><span>Nilai Terendah:</span><span class="stat-value">{sch['min']:.2f}</span></div>
             </div>
         </div>
         """, unsafe_allow_html=True)
