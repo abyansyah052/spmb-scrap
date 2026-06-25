@@ -208,6 +208,16 @@ user_grade = st.sidebar.number_input(
     help="Masukkan nilai rata-rata prestasi akademik Anda untuk mensimulasikan posisi peringkat."
 )
 
+# Slider penyerapan tahap sebelumnya (Zonasi, Afirmasi, Mutasi, Prestasi Lomba)
+absorbed_rate = st.sidebar.slider(
+    "Siswa Lolos Tahap I dan II (%)",
+    min_value=10,
+    max_value=90,
+    value=50,
+    step=5,
+    help="Persentase estimasi siswa dengan nilai tinggi yang SUDAH diterima pada tahap sebelumnya (Zonasi dan Afirmasi) sehingga tidak ikut berkompetisi di Tahap III."
+)
+
 if st.sidebar.button("Refresh Data Live"):
     st.cache_data.clear()
     st.toast("Cache dibersihkan! Memuat ulang data dari SPMB Jatim...")
@@ -301,6 +311,9 @@ for sch in TARGET_SCHOOLS:
 # Hitung total siswa di Surabaya dengan nilai > user_grade
 students_above_user = calculate_students_above(user_grade)
 
+# Kurangi kompetitor kota yang sudah diterima di Tahap I (Zonasi) & Tahap II (Afirmasi/Mutasi)
+active_competitors_in_city = int(round(students_above_user * (1 - (absorbed_rate / 100.0))))
+
 # Hitung jumlah siswa pendaftar nyata di 6 sekolah target yang saat ini nilainya di atas user_grade
 current_competitors_per_school = {}
 total_current_competitors = 0
@@ -343,8 +356,8 @@ for sch in processed_schools:
     sch_id = sch["id"]
     quota = sch["quota"]
     
-    # Estimasi kompetitor proyeksi = total siswa di surabaya > user_grade * bobot sekolah tersebut
-    projected_competitors = students_above_user * school_weights[sch_id]
+    # Estimasi kompetitor proyeksi = sisa kompetitor aktif di surabaya > user_grade * bobot sekolah tersebut
+    projected_competitors = active_competitors_in_city * school_weights[sch_id]
     
     # Proyeksi peringkat akhir = kompetitor + 1
     projected_rank = int(round(projected_competitors)) + 1
@@ -461,7 +474,8 @@ with col_right:
     st.write(f"Statistik Sebaran Nilai Kota Surabaya:")
     st.markdown(f"""
     - Jumlah siswa di Surabaya dengan nilai **> {user_grade:.2f}**: **{students_above_user} siswa**
-    - Potensi akumulasi persaingan: Dengan total **{students_above_user}** siswa bernilai di atas Anda di Surabaya, keketatan sekolah unggulan (Top 3: SMAN 5, 2, 15) akan meningkat signifikan di akhir masa pendaftaran seiring masuknya pendaftaran baru.
+    - Sisa kompetitor aktif setelah dikurangi penyerapan Tahap I & II (**{absorbed_rate}%**): **{active_competitors_in_city} siswa**
+    - Potensi akumulasi persaingan: Dari estimasi **{active_competitors_in_city}** siswa bernilai tinggi yang belum terdaftar, keketatan sekolah unggulan (Top 3: SMAN 5, 2, 15) akan meningkat di akhir masa pendaftaran.
     """)
     
     # Tampilkan tabel sebaran data asli sebagai referensi pengguna
