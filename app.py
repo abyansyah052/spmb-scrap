@@ -214,7 +214,7 @@ absorbed_rate = st.sidebar.slider(
     "Siswa Lolos Tahap I dan II (%)",
     min_value=10,
     max_value=90,
-    value=50,
+    value=60,
     step=5,
     help="Persentase estimasi siswa dengan nilai tinggi yang SUDAH diterima pada tahap sebelumnya (Zonasi dan Afirmasi) sehingga tidak ikut berkompetisi di Tahap III."
 )
